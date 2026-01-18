@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 from typing import List, Optional
@@ -9,16 +11,34 @@ from .scraper import scrape_all_nifty50_pe
 from .scheduler import start_scheduler, stop_scheduler
 from pydantic import BaseModel
 import logging
+import os
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Environment variables
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+FRONTEND_BUILD_PATH = os.getenv("FRONTEND_BUILD_PATH", "../frontend/build")
+
 app = FastAPI(title="Nifty 50 P/E Tracker API")
 
-# CORS middleware for frontend
+# CORS middleware - more permissive in production
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+if ENVIRONMENT == "production":
+    # In production, allow all origins or specify your domain
+    # Add GitHub Pages domain if using GitHub Pages for frontend
+    default_origins = ["*"] if os.getenv("CORS_ORIGINS") is None else os.getenv("CORS_ORIGINS").split(",")
+    # Add common GitHub Pages patterns
+    github_pages_patterns = [
+        "https://*.github.io",
+        "https://aryamanvepa.github.io"
+    ]
+    cors_origins = default_origins + github_pages_patterns if "*" not in default_origins else default_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # React dev servers
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,35 +87,11 @@ class CompanyPEDataResponse(BaseModel):
     data: List[dict]  # List of {date, pe_ratio}
 
 
-@app.get("/")
-async def root():
-    return {"message": "Nifty 50 P/E Tracker API"}
-
-
 @app.get("/api/companies", response_model=List[CompanyResponse])
 async def get_companies(db: Session = Depends(get_db)):
     """Get all companies"""
     companies = db.query(Company).all()
     return companies
-
-
-@app.get("/api/pe-data/{company_id}")
-async def get_pe_data(
-    company_id: int,
-    start_date: Optional[date] = None,
-    end_date: Optional[date] = None,
-    db: Session = Depends(get_db)
-):
-    """Get P/E data for a specific company"""
-    query = db.query(PEData).filter(PEData.company_id == company_id)
-    
-    if start_date:
-        query = query.filter(PEData.date >= start_date)
-    if end_date:
-        query = query.filter(PEData.date <= end_date)
-    
-    pe_data = query.order_by(PEData.date.asc()).all()
-    return pe_data
 
 
 @app.get("/api/pe-data/all")
@@ -136,6 +132,25 @@ async def get_all_pe_data(
         })
     
     return list(companies_data.values())
+
+
+@app.get("/api/pe-data/{company_id}")
+async def get_pe_data(
+    company_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db)
+):
+    """Get P/E data for a specific company"""
+    query = db.query(PEData).filter(PEData.company_id == company_id)
+    
+    if start_date:
+        query = query.filter(PEData.date >= start_date)
+    if end_date:
+        query = query.filter(PEData.date <= end_date)
+    
+    pe_data = query.order_by(PEData.date.asc()).all()
+    return pe_data
 
 
 @app.post("/api/scrape-now")
@@ -181,3 +196,29 @@ async def get_stats(db: Session = Depends(get_db)):
             "max": max_date.isoformat() if max_date else None
         }
     }
+
+
+# Serve static files in production (must be after all API routes)
+if ENVIRONMENT == "production":
+    frontend_path = Path(FRONTEND_BUILD_PATH)
+    if frontend_path.exists():
+        # Mount static files (CSS, JS, images, etc.)
+        static_path = frontend_path / "static"
+        if static_path.exists():
+            app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+        
+        # Serve React app for all non-API routes (React Router support)
+        @app.get("/{full_path:path}")
+        async def serve_frontend(full_path: str):
+            # Don't serve frontend for API routes
+            if full_path.startswith("api"):
+                raise HTTPException(status_code=404, detail="Not found")
+            
+            # Serve index.html for all other routes (React Router)
+            index_path = frontend_path / "index.html"
+            if index_path.exists():
+                return FileResponse(str(index_path))
+            else:
+                raise HTTPException(status_code=404, detail="Frontend build not found")
+    else:
+        logger.warning(f"Frontend build path not found: {FRONTEND_BUILD_PATH}")
