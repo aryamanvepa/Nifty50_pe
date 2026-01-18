@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - FRONTEND_BUILD_PATH=./frontend_build
+      - PORT=8000
+      - NSE_SERVICE_URL=http://nse-service:3001
+    volumes:
+      - ./backend/nifty50_pe_data.db:/app/nifty50_pe_data.db
+    depends_on:
+      - nse-service
+    restart: unless-stopped
+
+  nse-service:
+    build:
+      context: ./backend/nse_service
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+    restart: unless-stopped

@@ -3,7 +3,11 @@ import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import './App.css';
 
-const API_BASE_URL = 'http://localhost:8000';
+// Use environment variable or default to localhost for development
+// In production (GitHub Pages), this will use the backend URL from REACT_APP_API_URL
+// If REACT_APP_API_URL is not set, it will use relative URLs (same domain)
+const API_BASE_URL = process.env.REACT_APP_API_URL || 
+  (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000');
 
 function App() {
   const [companies, setCompanies] = useState([]);
@@ -21,11 +25,15 @@ function App() {
   useEffect(() => {
     if (selectedCompanies.length > 0) {
       fetchPEData();
+    } else {
+      setPeData([]);
+      setLoading(false);
     }
   }, [selectedCompanies, timeRange]);
 
   const fetchCompanies = async () => {
     try {
+      setLoading(true);
       const response = await axios.get(`${API_BASE_URL}/api/companies`);
       setCompanies(response.data);
       // Select first 5 companies by default
@@ -34,6 +42,9 @@ function App() {
       }
     } catch (error) {
       console.error('Error fetching companies:', error);
+      alert('Error loading companies. Please check if the backend is running.');
+    } finally {
+      setLoading(false);
     }
   };
 
